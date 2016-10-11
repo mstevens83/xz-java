@@ -3,6 +3,7 @@
  *
  * Authors: Lasse Collin <lasse.collin@tukaani.org>
  *          Igor Pavlov <http://7-zip.org/>
+ *          Matthias Stevens <m.stevens@ucl.ac.uk>
  *
  * This file has been put into the public domain.
  * You can do whatever you want with this file.
@@ -366,6 +367,37 @@ public class LZMAInputStream extends InputStream {
                            int dictSize, byte[] presetDict)
             throws IOException {
         initialize(in, uncompSize, lc, lp, pb, dictSize, presetDict);
+    }
+
+    /**
+     * Creates a new input stream that decompresses raw LZMA data (no .lzma
+     * header) from <code>in</code> optionally with a preset dictionary.
+     *
+     * @param       in          input stream from which LZMA-compressed
+     *                          data is read
+     *
+     * @param       uncompSize  uncompressed size of the LZMA stream or -1
+     *                          if the end marker is used in the LZMA stream
+     *
+     * @param       options     LZMA compression options; the same class
+     *                          is used here as is for LZMA2
+     *
+     * @throws      NullPointerException
+     *                          if options are {@code null}
+     *
+     * @throws      CorruptedInputException
+     *                          if the first input byte is not 0x00
+     *
+     * @throws      EOFException file is truncated or corrupt
+     *
+     * @throws      IOException may be thrown by <code>in</code>
+     */
+    public LZMAInputStream(InputStream in, long uncompSize, LZMA2Options options)
+            throws IOException {
+        if (options == null)
+            throw new NullPointerException("options cannot be null");
+        initialize(in, uncompSize, options.getLc(), options.getLp(),
+                   options.getPb(), options.getDictSize(), options.getPresetDict());
     }
 
     private void initialize(InputStream in, long uncompSize, byte propsByte,
