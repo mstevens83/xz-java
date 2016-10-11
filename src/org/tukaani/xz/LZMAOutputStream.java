@@ -224,10 +224,9 @@ public class LZMAOutputStream extends FinishableOutputStream {
     }
 
     /**
-     * Flushing isn't supported and will throw XZIOException.
+     * Does nothing as flushing isn't supported.
      */
-    public void flush() throws IOException {
-        throw new XZIOException("LZMAOutputStream does not support flushing");
+    public void flush() {
     }
 
     /**
