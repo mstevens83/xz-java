@@ -3,6 +3,7 @@
  *
  * Authors: Lasse Collin <lasse.collin@tukaani.org>
  *          Igor Pavlov <http://7-zip.org/>
+ *          Matthias Stevens <m.stevens@ucl.ac.uk>
  *
  * This file has been put into the public domain.
  * You can do whatever you want with this file.
@@ -22,6 +23,13 @@ import org.tukaani.xz.lzma.LZMAEncoder;
  * @since 1.6
  */
 public class LZMAOutputStream extends FinishableOutputStream {
+
+    /**
+     * Value (-1) indicating an uncompressed size which is unknown at
+     * the time of creating the {@link LZMAOutputStream} instance.
+     */
+    static public final long UNKNOWN_UNCOMPRESSED_SIZE = 0xffffffffffffffffL;
+
     private OutputStream out;
 
     private final LZEncoder lz;
@@ -30,7 +38,8 @@ public class LZMAOutputStream extends FinishableOutputStream {
 
     private final int props;
     private final boolean useEndMarker;
-    private long uncompressedSize = 0;
+    private final long intendedUncompressedSize;
+    private long currentUncompressedSize = 0;
 
     private boolean finished = false;
     private IOException exception = null;
@@ -38,12 +47,15 @@ public class LZMAOutputStream extends FinishableOutputStream {
     private final byte[] tempBuf = new byte[1];
 
     private LZMAOutputStream(OutputStream out, LZMA2Options options,
-                             boolean useHeader, boolean useEndMarker)
+                             boolean useHeader, boolean useEndMarker, long intendedUncompressedSize)
             throws IOException {
         if (out == null)
             throw new NullPointerException();
+        if (intendedUncompressedSize < UNKNOWN_UNCOMPRESSED_SIZE)
+            throw new IllegalArgumentException("Invalid uncompressed size");
 
         this.useEndMarker = useEndMarker;
+        this.intendedUncompressedSize = intendedUncompressedSize;
 
         this.out = out;
         rc = new RangeEncoderToStream(out);
@@ -70,22 +82,25 @@ public class LZMAOutputStream extends FinishableOutputStream {
         props = (options.getPb() * 5 + options.getLp()) * 9 + options.getLc();
 
         if (useHeader) {
+            // Write props byte:
             out.write(props);
 
+            // Write dictionary size (4 bytes):
             for (int i = 0; i < 4; ++i) {
                 out.write(dictSize & 0xFF);
                 dictSize >>>= 8;
             }
 
-            for (int i = 0; i < 8; ++i)
-                out.write(0xFF);
+            // Write uncompressed size (8 bytes):
+            for(int i = 0; i < 8; i++)
+                out.write((int) (intendedUncompressedSize >>> (8 * i)) & 0xFF);
         }
     }
 
     /**
      * Creates a new compressor for the legacy .lzma file format.
      * The files will always use the end of stream marker and thus
-     * will not have the uncompressed size stored in the header.
+     * will not have the actual uncompressed size stored in the header.
      * <p>
      * Note that a preset dictionary cannot be used in .lzma files but
      * it can be used for raw LZMA streams.
@@ -100,7 +115,35 @@ public class LZMAOutputStream extends FinishableOutputStream {
      */
     public LZMAOutputStream(OutputStream out, LZMA2Options options)
             throws IOException {
-        this(out, options, true, true);
+        this(out, options, UNKNOWN_UNCOMPRESSED_SIZE);
+    }
+
+    /**
+     * Creates a new compressor for the legacy .lzma file format.
+     * This constructor should be used when the uncompressed input
+     * size  is known upfront. It will be storing in the header.
+     * Unless {@link #UNKNOWN_UNCOMPRESSED_SIZE} is passed no end
+     * of stream marker will be used.
+     * <p>
+     * Note that a preset dictionary cannot be used in .lzma files but
+     * it can be used for raw LZMA streams.
+     *
+     * @param       out         output stream to which the compressed data
+     *                          will be written
+     *
+     * @param       options     LZMA compression options; the same class
+     *                          is used here as is for LZMA2
+     *
+     * @param       inputSize   Uncompressed data size (in bytes). Pass
+     *                          {@link #UNKNOWN_UNCOMPRESSED_SIZE} when
+     *                          unknown (end of stream marker will be used)
+     *
+     * @throws      IOException may be thrown from <code>out</code>
+     */
+    public LZMAOutputStream(OutputStream out, LZMA2Options options,
+                            long inputSize)
+            throws IOException {
+        this(out, options, true, inputSize == UNKNOWN_UNCOMPRESSED_SIZE, inputSize);
     }
 
     /**
@@ -124,7 +167,7 @@ public class LZMAOutputStream extends FinishableOutputStream {
      */
     public LZMAOutputStream(OutputStream out, LZMA2Options options,
                             boolean useEndMarker) throws IOException {
-        this(out, options, false, useEndMarker);
+        this(out, options, false, useEndMarker, UNKNOWN_UNCOMPRESSED_SIZE);
     }
 
     /**
@@ -142,7 +185,7 @@ public class LZMAOutputStream extends FinishableOutputStream {
      * the end of stream marker.
      */
     public long getUncompressedSize() {
-        return uncompressedSize;
+        return currentUncompressedSize;
     }
 
     public void write(int b) throws IOException {
@@ -160,7 +203,12 @@ public class LZMAOutputStream extends FinishableOutputStream {
         if (finished)
             throw new XZIOException("Stream finished or closed");
 
-        uncompressedSize += len;
+        if (intendedUncompressedSize > UNKNOWN_UNCOMPRESSED_SIZE &&
+                currentUncompressedSize + len > intendedUncompressedSize)
+            throw new XZIOException("Exceeded pre-configured intended uncompressed size (" +
+                    intendedUncompressedSize + " bytes)");
+
+        currentUncompressedSize += len;
 
         try {
             while (len > 0) {
